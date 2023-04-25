@@ -6,6 +6,7 @@ from mutagen.flac import FLAC, Picture
 import mutagen.id3 as id3
 from mutagen.id3 import ID3NoHeaderError
 from concurrent.futures import ThreadPoolExecutor
+import pyperclip
 
 from rsack.clients import bugs
 from rsack.utils import Settings, track_to_flac, insert_total_tracks, contribution_check, sanitize, _format_date
@@ -21,7 +22,8 @@ class Download:
         """
         self.settings = Settings().Bugs()
         self.client = bugs.Client(proxy=self.settings['proxy'])
-        self.conn_info = self.client.auth(email=self.settings['email'], password=self.settings['password'])
+        self.conn_info = self.client.auth(
+            email=self.settings['email'], password=self.settings['password'])
         logger.info(f"Threads: {self.settings['threads']}")
         if type == "artist":
             self._artist(id)
@@ -33,13 +35,14 @@ class Download:
 
         Args:
             id (int): Unique Artist ID
-        
+
         Note:
             self.client.get_artist() returns an album list, but does not include all the necessary tagging info.
             This means it's not worth passing it on and an additional request has to be used.
         """
         artist = self.client.get_artist(id)
-        logger.info(f"{len(artist['list'][1]['artist_album']['list'])} releases found")
+        logger.info(
+            f"{len(artist['list'][1]['artist_album']['list'])} releases found")
         for album in artist['list'][1]['artist_album']['list']:
             contribution = contribution_check(id, int(album['artist_id']))
             if contribution:
@@ -49,14 +52,15 @@ class Download:
                     logger.debug("Skipping album contribution")
             else:
                 self._album(album['album_id'])
-                
+
     def _album(self, id: int):
         """Handle album downloads
 
         Args:
             id (int): Unique album id
         """
-        self.album = self.client.get_album(id)['list'][0]['album_info']['result']
+        self.album = self.client.get_album(
+            id)['list'][0]['album_info']['result']
         logger.info(f"Album: {self.album['title']}")
         # Acquire disc total
         self.album['disc_total'] = self.album['tracks'][-1]['disc_id']
@@ -67,7 +71,8 @@ class Download:
         # Begin downloading tracks
         with ThreadPoolExecutor(max_workers=int(self.settings['threads'])) as executor:
             executor.map(self._download, self.album['tracks'])
-    
+        os.remove(self.cover_path)
+
     @logger.catch
     def _template(self):
         keys = {
@@ -84,7 +89,7 @@ class Download:
         for k in keys:
             template = template.replace(f"{{{k}}}", sanitize(keys[k]))
         return template
-            
+
     @logger.catch
     def _album_path(self):
         """Creates necessary directories"""
@@ -94,18 +99,22 @@ class Download:
                 logger.debug(f"Creating {self.album_path}")
                 os.makedirs(self.album_path)
         except OSError as exc:
-            if exc.errno == 36: # Exceeded path limit
-                if len(self.album['artist_disp_nm']) > len(self.album['title']): #  Check whether artist name or album name is the issue
-                    self.album['artist_disp_nm'] = "Various Artists" # Change to V.A. as Bugs has likely compiled a huge list of artists
-                    logger.debug("Artist name forcibly changed to try and reduce length")
-                else: # If title is the issue
-                    logger.debug("Album title forcibly changed to try and reduce length")
+            if exc.errno == 36:  # Exceeded path limit
+                # Check whether artist name or album name is the issue
+                if len(self.album['artist_disp_nm']) > len(self.album['title']):
+                    # Change to V.A. as Bugs has likely compiled a huge list of artists
+                    self.album['artist_disp_nm'] = "Various Artists"
+                    logger.debug(
+                        "Artist name forcibly changed to try and reduce length")
+                else:  # If title is the issue
+                    logger.debug(
+                        "Album title forcibly changed to try and reduce length")
                     self.album_path = self.settings['path'] + "EDIT ME"
                 # Retry
                 if not os.path.exists(self.album_path):
                     logger.debug(f"Creating {self.album_path}")
                     os.makedirs(self.album_path)
-                    
+
         # Create nested disc folders
         if self.album['disc_total'] > 1:
             self.discs = True
@@ -113,7 +122,7 @@ class Download:
                 d = os.path.join(self.album_path, f"Disc {str(i + 1)}")
                 if not os.path.exists(d):
                     os.makedirs(d)
-        else: 
+        else:
             self.discs = False
 
     @logger.catch
@@ -124,12 +133,15 @@ class Download:
             track (dict): Contains track information from API response
         """
         if track['is_flac_str_premium'] and not self.client.premium:
-            logger.warning("Lossless is only available for Premium users, MP3 will be downloaded.")
+            logger.warning(
+                "Lossless is only available for Premium users, MP3 will be downloaded.")
         logger.info(f"Track: {track['track_title']}")
         if self.discs:
-            file_path = os.path.join(self.album_path, f"Disc {str(track['disc_id'])}", f"{track['track_no']:02d}. {sanitize(track['track_title'])}.temp")
+            file_path = os.path.join(
+                self.album_path, f"Disc {str(track['disc_id'])}", f"{track['track_no']:02d}. {sanitize(track['track_title'])}.temp")
         else:
-            file_path = os.path.join(self.album_path, f"{track['track_no']:02d}. {sanitize(track['track_title'])}.temp")
+            file_path = os.path.join(
+                self.album_path, f"{track['track_no']:02d}. {sanitize(track['track_title'])}.temp")
         if self._exist_check(file_path):
             logger.debug(f"{track['track_title']} already exists")
         else:
@@ -144,12 +156,14 @@ class Download:
             headers = {
                 "Range": 'bytes=%d-' % self._return_bytes(file_path),
             }
-            r = requests.get(f"http://api.bugs.co.kr/3/tracks/{track['track_id']}/listen/android/flac", headers=headers, params=params, stream=True)
-            if r.url.split("?")[0].endswith(".mp3"): # If response redirects to MP3 file set quality to .mp3
+            r = requests.get(
+                f"http://api.bugs.co.kr/3/tracks/{track['track_id']}/listen/android/flac", headers=headers, params=params, stream=True)
+            # If response redirects to MP3 file set quality to .mp3
+            if r.url.split("?")[0].endswith(".mp3"):
                 quality = '.mp3'
             elif r.url.split("?")[0].endswith(".m4a"):
-                quality = '.m4a' 
-            else: # Otherwise .flac
+                quality = '.m4a'
+            else:  # Otherwise .flac
                 quality = '.flac'
             if quality != '.m4a':
                 if r.status_code == 404:
@@ -175,13 +189,14 @@ class Download:
         Returns:
             int: Returns size in bytes
         """
-        
+
         if os.path.exists(file_path):
-            logger.debug(f"Existing .temp file {os.path.basename(file_path)} has resumed.")
+            logger.debug(
+                f"Existing .temp file {os.path.basename(file_path)} has resumed.")
             return os.path.getsize(file_path)
         else:
             return 0
-    
+
     @staticmethod
     def _exist_check(file_path: str) -> bool:
         """Check if file exists for both possible cases
@@ -198,19 +213,62 @@ class Download:
             return True
         else:
             return False
-    
+
     def _download_cover(self):
         """Downloads cover artwork"""
-        self.cover_path = os.path.join(self.album_path, 'cover.jpg')
+        # original cover_path
+        self.original_path = os.path.join(self.album_path, 'cover.jpg')
+        # embed cover path
+        self.cover_path = os.path.join(self.album_path, 'embed.jpg')
         if os.path.exists(self.cover_path):
             logger.info('Cover already exists')
         else:
-            r = requests.get(self.album['img_urls'][self.settings['cover_size']])
+            logger.info("Cover Url: " + self.album['img_urls']['500'])
+            pyperclip.copy(self.album['img_urls']['500'])
+            # get the original cover size
+            original_cover_size = int(requests.get(
+                self.album['img_urls']['original'], stream=True).headers['Content-Length'])
+            # check if embed the original cover satisfy the Private Tracker rules(original cover size maybe too large)
+            if original_cover_size >= 10 * 1024 ** 2:
+                if self.settings['embed_cover_size'] == 'original' and self.settings['cover_size'] == 'original':
+                    logger.warning(
+                        'original cover(with %.2f MB) too large, change to 1000px' % (original_cover_size/1024/1024))
+                    cover = '1000'
+                    embed_cover = '1000'
+                elif self.settings['embed_cover_size'] != 'original' and self.settings['cover_size'] == 'original':
+                    logger.warning(
+                        'original cover(with %.2f MB) too large, change to 1000px' % (original_cover_size/1024/1024))
+                    embed_cover = self.settings['embed_cover_size']
+                    cover = '1000'
+                elif self.settings['cover_size'] != 'original' and self.settings['embed_cover_size'] == 'original':
+                    logger.warning(
+                        'original cover(with %.2f MB) too large, change to 1000px' % (original_cover_size/1024/1024))
+                    cover = self.settings['cover_size']
+                    embed_cover = '1000'
+                else:
+                    cover = self.settings['cover_size']
+                    embed_cover = self.settings['embed_cover_size']
+            elif original_cover_size <= 2.5 * 1024 ** 2:
+                embed_cover = self.settings['embed_cover_size']
+                cover = self.settings['cover_size']
+            else:
+                logger.warning(
+                    'embed original cover(with %.2f MB) too large, change to %spx' % (original_cover_size/1024/1024, self.settings['embed_cover_size']))
+
+                embed_cover = '1000' if self.settings[
+                    'embed_cover_size'] == 'original' else self.settings['embed_cover_size']
+                cover = self.settings['cover_size']
+            r = requests.get(self.album['img_urls'][embed_cover])
             r.raise_for_status
             with open(self.cover_path, 'wb') as f:
                 f.write(r.content)
-            logger.info('Cover artwork downloaded.')
-    
+            logger.info('Embed artwork downloaded.')
+            r = requests.get(self.album['img_urls'][cover])
+            r.raise_for_status
+            with open(self.original_path, 'wb') as f:
+                f.write(r.content)
+            logger.info('cover artwork downloaded.')
+
     @logger.catch
     def _tag(self, track: dict, file_path: str):
         """Append ID3/FLAC tags
@@ -224,7 +282,7 @@ class Download:
         if str(file_path).endswith('.flac'):
             f_file = FLAC(file_path)
             # Add cover artwork to flac file
-            f_file.clear_pictures() # Delete existing cover artwork
+            f_file.clear_pictures()  # Delete existing cover artwork
             if self.cover_path:
                 f_image = Picture()
                 f_image.type = 3
@@ -266,10 +324,12 @@ class Download:
                 except KeyError:
                     continue
             # Track and disc numbers
-            m_file.add(id3.TRCK(encoding=3, text=f"{track['track_no']}/{track['track_total']}"))
-            m_file.add(id3.TPOS(encoding=3, text=f"{track['disc_id']}/{self.album['disc_total']}"))
+            m_file.add(
+                id3.TRCK(encoding=3, text=f"{track['track_no']}/{track['track_total']}"))
+            m_file.add(
+                id3.TPOS(encoding=3, text=f"{track['disc_id']}/{self.album['disc_total']}"))
             # Apply cover artwork
-            m_file.delall("APIC") # Delete existing cover artwork
+            m_file.delall("APIC")  # Delete existing cover artwork
             if self.cover_path:
                 with open(self.cover_path, 'rb') as cov_obj:
                     m_file.add(id3.APIC(3, 'image/jpg', 3, '', cov_obj.read()))
@@ -288,7 +348,8 @@ class Download:
         # If user prefers timed then retrieve timed lyrics
         if lyrics_tp and self.settings['timed_lyrics']:
             # Retrieve timed lyrics
-            r = requests.get(f"https://music.bugs.co.kr/player/lyrics/T/{track_id}")
+            r = requests.get(
+                f"https://music.bugs.co.kr/player/lyrics/T/{track_id}")
             # Format timed lyrics
             lyrics = r.json()['lyrics'].replace("＃", "\n")
             line_split = (line.split('|') for line in lyrics.splitlines())
@@ -296,7 +357,8 @@ class Download:
                 f'[{datetime.fromtimestamp(round(float(a), 2)).strftime("%M:%S.%f")[0:-4]}]{b}' for a, b in line_split))
         # If user prefers untimed or timed unavailable then use untimed
         elif not lyrics_tp or not self.settings['timed_lyrics']:
-            r = requests.get(f'https://music.bugs.co.kr/player/lyrics/N/{track_id}')
+            r = requests.get(
+                f'https://music.bugs.co.kr/player/lyrics/N/{track_id}')
             lyrics = r.json()['lyrics']
             # If unavailable leave as empty string
             if lyrics_tp is None:
